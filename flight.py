@@ -56,7 +56,7 @@ for i, (x, y) in enumerate(route):
         print(f"✅ Сохранено: {filename}")
         
     except rospy.ROSException:
-        print("❌ Ошибка: камера не ответила, летим дальше")
+        print("Ошибка: камера не ответила, летим дальше")
 
 print("Лабиринт пройден. Посадка...")
 land()

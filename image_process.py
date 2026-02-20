@@ -1,51 +1,33 @@
-import os
-import glob
-import cv2
+import os, glob, cv2
 from ultralytics import YOLO
 
-OUTPUT_DIR = "results"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+PHOTOS_DIR = "photos"
+RESULTS_DIR = "results"
+os.makedirs(RESULTS_DIR, exist_ok=True)
 
-print("Загрузка модели YOLOv8...")
-model = YOLO('yolov8n.pt') 
+TARGET_CLASSES = {"orange", "teddy bear"}
+CONF = 0.4
 
-TARGET_CLASSES = ['orange', 'teddy bear']
+model = YOLO("yolov8n.pt")
 
-image_files = glob.glob("photos/cell_*.jpg")
-if not image_files:
-    print("❌ Фотки не найдены! Убедись, что скрипт лежит в той же папке.")
-    exit()
+imgs = sorted(glob.glob(os.path.join(PHOTOS_DIR, "*.jpg")))
+print("Photos:", len(imgs))
 
-print(f"Найдено фотографий: {len(image_files)}. Начинаем инференс...\n")
+for p in imgs:
+    r = model.predict(source=p, conf=CONF, verbose=False)[0]
+    found = set()
+    for b in r.boxes:
+        cls = model.names[int(b.cls[0])]
+        if cls in TARGET_CLASSES:
+            found.add(cls)
 
-total_score = 0
+    out = r.plot()
+    out_path = os.path.join(RESULTS_DIR, "DETECTED_" + os.path.basename(p))
+    cv2.imwrite(out_path, out)
 
-for img_path in image_files:
-    filename = os.path.basename(img_path)
-    results = model.predict(source=img_path, conf=0.4, verbose=False)
-    
-    found_targets = []
-    
-    for r in results:
-        boxes = r.boxes
-        for box in boxes:
-            class_id = int(box.cls[0])
-            class_name = model.names[class_id]
-            
-            if class_name in TARGET_CLASSES:
-                found_targets.append(class_name)
-    
-    if found_targets:
-        targets_str = ", ".join(found_targets).upper()
-        print(f"В файле {filename} найдено: {targets_str}")
-        total_score += 100 * len(found_targets)
-        plotted_img = results[0].plot()
-        
-        save_path = os.path.join(OUTPUT_DIR, f"DETECTED_{filename}")
-        cv2.imwrite(save_path, plotted_img)
+    if found:
+        print(os.path.basename(p), "->", ", ".join(sorted(found)))
     else:
-        print(f"В файле {filename} пусто.")
+        print(os.path.basename(p), "-> empty")
 
-print("\n" + "="*40)
-print(f"Пруфы с рамками сохранены в папку: {OUTPUT_DIR}/")
-print("="*40)
+print("Saved to", RESULTS_DIR)
