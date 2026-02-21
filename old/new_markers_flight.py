@@ -10,15 +10,13 @@ import os
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 import cv2
+import glob
 from ultralytics import YOLO
 
 # ============================================
 # ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ДЛЯ КОНФИГУРАЦИИ КУБА
 # ============================================
 CELL = 0.8
-CUBE_SIDE_LENGTH = 0.5      # Длина стороны куба в метрах
-CUBE_HEIGHT = 0.5          # Высота куба в метрах (смещение по Z между нижней и верхней гранями)
-POINT_DELAY = 5            # Задержка между точками в секундах
 TAKEOFF_HEIGHT = 0.4       # Высота взлета в метрах
 FLIGHT_SPEED = 0.5         # Скорость полета м/с
 # ============================================
@@ -43,13 +41,14 @@ TARGET_CLASSES = ['orange', 'teddy bear'] # Объекты для поиска
 PHOTOS_DIR = "photos"
 os.makedirs(PHOTOS_DIR, exist_ok=True)
 
+DETECTIONS_DIR = "detections"
+os.makedirs(DETECTIONS_DIR, exist_ok=True)
+
 class DroneController(Node):
     def __init__(self):
         super().__init__('drone_controller')
 
         # Инициализация ИИ
-        self.get_logger().info("Загрузка YOLO...")
-        self.model = YOLO(YOLO_MODEL_PATH) # Используем ncnn для лучшего тем лучше мы чем чем
         self.bridge = CvBridge()
 
         # Создаем клиентов для сервисов
@@ -100,11 +99,68 @@ class DroneController(Node):
                     cv2.imwrite(path, frame)
                     self.get_logger().info(f"Снимок сохранен: {path}")
 
-    def snap(self, tag: str):
+    def run_yolo_postflight(self):
+        photos = sorted(glob.glob(os.path.join(PHOTOS_DIR, "scan_raw_*.jpg")))
+        if not photos:
+            self.get_logger().warn(f"No photos found in {PHOTOS_DIR}/ (expected scan_raw_*.jpg)")
+            return
+
+        self.get_logger().info("Loading YOLO model (postflight)...")
+        try:
+            model = YOLO(YOLO_MODEL_PATH)
+        except Exception as e:
+            self.get_logger().error(f"Failed to load YOLO model '{YOLO_MODEL_PATH}': {e}")
+            return
+
+        found_summary = []  # list of (photo, labels)
+
+        for p in photos:
+            try:
+                results = model.predict(source=p, conf=0.5, verbose=False)
+            except Exception as e:
+                self.get_logger().warn(f"YOLO failed on {p}: {e}")
+                continue
+
+            found = []
+            for r in results:
+                for box in getattr(r, "boxes", []):
+                    cls_id = int(box.cls[0])
+                    label = model.names.get(cls_id, str(cls_id))
+                    if label in TARGET_CLASSES:
+                        found.append(label)
+
+            # сохранить картинку с боксами (всегда, чтобы судьям листать 1 папку)
+            try:
+                annotated = results[0].plot() if results else None
+                if annotated is not None:
+                    out_name = "DETECTED_" + os.path.basename(p)
+                    out_path = os.path.join(DETECTIONS_DIR, out_name)
+                    cv2.imwrite(out_path, annotated)
+            except Exception as e:
+                self.get_logger().warn(f"Failed to save annotated for {p}: {e}")
+
+            if found:
+                found_summary.append((os.path.basename(p), sorted(set(found))))
+                self.get_logger().info(f"✅ {os.path.basename(p)}: found {sorted(set(found))}")
+            else:
+                self.get_logger().info(f"— {os.path.basename(p)}: empty")
+
+        # Итог
+        if found_summary:
+            self.get_logger().info("==== YOLO SUMMARY ====")
+            for fname, labels in found_summary:
+                self.get_logger().info(f"{fname}: {', '.join(labels)}")
+            self.get_logger().info(f"Annotated proofs: {DETECTIONS_DIR}/DETECTED_cell_*.jpg")
+        else:
+            self.get_logger().info("==== YOLO SUMMARY: nothing found ====")
+            self.get_logger().info(f"Annotated proofs: {DETECTIONS_DIR}/DETECTED_cell_*.jpg")
+
+    def snap(self):
         if self._last_frame is None:
             self.get_logger().warn("No camera frame yet, skip snap")
             return False
-        path = os.path.join(PHOTOS_DIR, f"{tag}.jpg")
+        timestamp = int(time.time())
+        path = os.path.join(PHOTOS_DIR, f"scan_raw_{timestamp}.jpg")
         try:
             cv2.imwrite(path, self._last_frame)
             self.get_logger().info(f"📸 saved: {path}")
@@ -152,6 +208,7 @@ class DroneController(Node):
         request.yaw = float(yaw)
         request.speed = float(speed)
         request.auto_arm = bool(auto_arm)
+        request.angular_velocity = 0.0
         request.frame_id = str(frame_id)
         
         response = self.call_service(self.navigate_client, request)
@@ -238,12 +295,12 @@ def main():
 
         # Полёт по змейке (relative body)
         for i, (name, dx, dy, dz) in enumerate(BODY_MOVES, start=1):
-            success = drone.navigate(dx, dy, dz, yaw=0.0, speed=FLIGHT_SPEED, auto_arm=True, frame_id="body")
+            success = drone.navigate(dx, dy, dz, yaw=0.0, speed=FLIGHT_SPEED, auto_arm=False, frame_id="body")
 
             if success:
                 print(f"Двигаюсь к {name}")
-                drone.snap(f"{name} + {int(time.time())}")
-                drone.recognize()
+                drone.snap()
+                #drone.recognize()
                 time.sleep(4.0)
             else:
                 print(f"чет хуйня какая-то на {name}")
@@ -274,6 +331,7 @@ def main():
         if success:
             print("Landing command sent successfully")
             print("Waiting for landing to complete...")
+            drone.run_yolo_postflight()
             time.sleep(10)  # Ждем завершения посадки
         else:
             print("ERROR: Landing command failed")
@@ -285,6 +343,7 @@ def main():
         print("Attempting to land...")
         try:
             drone.land()
+            drone.run_yolo_postflight()
             time.sleep(5)
         except:
             pass
