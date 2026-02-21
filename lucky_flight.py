@@ -31,7 +31,7 @@ class LuckyFlightDroneController(DroneController):
                 self.get_logger().info(f"Success fly to {i}: ({dx}, {dy}, {dz})")
                 self.shot()
 
-                self.sleep_spin(10)
+                self.sleep_spin(5)
             else:
                 self.get_logger().error(f"FAILED {i}: ({dx}, {dy}, {dz})")
             

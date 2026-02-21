@@ -117,6 +117,15 @@ class DroneController(Node):
         else:
             self.get_logger().warn("Drone not connected or telemetry failed")
             return {'connected': False}
+        
+    def get_telemetry(self, frame_id):
+        req = GetTelemetry.Request()
+        if frame_id is not None and hasattr(req, "frame_id"):
+            req.frame_id = str(frame_id)
+        resp = self._call(self.tel_cli, req, timeout=3.0)
+        if resp and getattr(resp, "connected", False):
+            return resp
+        return None
 
 
     def navigate(self, x, y, z, yaw=float("nan"), speed=0.5, auto_arm=False, angular_velocity=0.0, frame_id="body"):
