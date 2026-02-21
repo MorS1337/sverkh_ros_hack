@@ -17,7 +17,7 @@ from ultralytics import YOLO
 # ===== КОНФИГУРАЦИЯ =====
 SPEED = 0.5
 TAKEOFF_Z = 1.0
-ARUCO_TARGETS = [49, 81, 51, 50, 99, 61, 58, 62, 64]  # Список ID маркеров в лабиринте
+ARUCO_TARGETS = [49, 81, 51, 50, 61, 58, 62, 64]  # Список ID маркеров в лабиринте
 IMAGE_TOPIC = "/main_camera/image_raw" # нужно тротлинговую сюда поставить
 YOLO_MODEL_PATH = "./yolov8n_ncnn_model" # Можно использовать yolo11n.pt
 TARGET_CLASSES = ['orange', 'teddy bear'] # Объекты для поиска
@@ -85,6 +85,7 @@ class MazeAiController(Node):
         req.x, req.y, req.z = float(x), float(y), float(z)
         req.yaw = float(yaw)
         req.speed = SPEED
+        req.angular_velocity = 0.5
         req.frame_id = frame_id
         req.auto_arm = auto_arm
         

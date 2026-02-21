@@ -11,22 +11,18 @@ from rclpy.node import Node
 from offboard_interfaces.srv import Navigate, GetTelemetry
 from std_srvs.srv import Trigger
 
-# ===== камера (опционально) =====
-CAMERA_AVAILABLE = False
-try:
-    from sensor_msgs.msg import Image
-    from cv_bridge import CvBridge
-    import cv2
-except Exception:
-    CAMERA_AVAILABLE = False
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
+import cv2
+from ultralytics import YOLO
 
-# ===== конфиг =====
 CELL = 0.8
-TAKEOFF_Z = 0.8       # взлет на 0.8 (или сколько вам надо)
+TAKEOFF_Z = 0.5       
 SPEED = 0.6
-ANG_VEL = 1.0
-
-BODY_FRAME = "body"
+ANG_VEL = 0.5
+ARUCO_TARGETS = [49, 81, 51, 50, 61, 58, 62, 64]
+TARGET_CLASSES = ['orange', 'teddy bear']
+YOLO_MODEL_PATH = "./yolov8n_ncnn_model"
 
 PHOTOS_DIR = "photos"
 os.makedirs(PHOTOS_DIR, exist_ok=True)
@@ -54,25 +50,18 @@ class DroneController(Node):
         self.telemetry_client = self.create_client(GetTelemetry, "/get_telemetry")
 
         self._lock = threading.Lock()
+        self.found_objects = set()
         self.wait_for_services()
 
         # camera
-        self.bridge = CvBridge() if CAMERA_AVAILABLE else None
+        self.bridge = CvBridge()
+        self.model = YOLO(YOLO_MODEL_PATH, task="detect")  # Используем ncnn для лучшего тем лучше мы чем чем
         self._last_frame = None
 
-        if CAMERA_AVAILABLE:
-            self.create_subscription(Image, IMAGE_TOPIC, self._image_cb, 10)
-            self.get_logger().info(f"Camera subscription ON: {IMAGE_TOPIC}")
-        else:
-            self.get_logger().warn("Camera disabled (no cv_bridge/sensor_msgs/cv2).")
+        self.create_subscription(Image, IMAGE_TOPIC, self._image_cb, 10)
+        self.get_logger().info(f"Camera subscription ON: {IMAGE_TOPIC}")
 
         self.get_logger().info("All services are ready")
-
-    def _image_cb(self, msg: "Image"):
-        try:
-            self._last_frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-        except Exception:
-            pass
 
     def wait_for_services(self):
         services = [
@@ -99,7 +88,7 @@ class DroneController(Node):
                 self.get_logger().error(f"Service call failed: {e}")
                 return None
 
-    def navigate(self, x, y, z, yaw=0.0, speed=SPEED, auto_arm=False, frame_id=BODY_FRAME):
+    def navigate(self, x, y, z, yaw=0.0, speed=SPEED, auto_arm=False, frame_id="body"):
         req = Navigate.Request()
         req.x = float(x)
         req.y = float(y)
@@ -136,20 +125,52 @@ class DroneController(Node):
         while time.time() - t0 < duration_s and rclpy.ok():
             rclpy.spin_once(self, timeout_sec=step)
 
+    def _image_cb(self, msg: "Image"):
+        try:
+            self._last_frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+        except Exception:
+            pass
+
+    def recognize(self, frame=None):
+        if frame is None:
+            frame = self._last_frame
+        if frame is None:
+            self.get_logger().warn("recognize: no frame available")
+            return
+        # stream=True для экономии памяти
+        results = self.model.predict(frame, conf=0.5, verbose=False, stream=True)
+
+        for r in results:
+            for box in r.boxes:
+                cls_id = int(box.cls[0])
+                label = self.model.names[cls_id]
+
+                if label in TARGET_CLASSES and label not in self.found_objects:
+                    self.get_logger().info(f"!!! ОБЪЕКТ ОБНАРУЖЕН: {label.upper()} !!!")
+                    self.found_objects.add(label)
+                    self.save_detection(frame, label)
+
     def snap(self, tag: str):
-        if not CAMERA_AVAILABLE:
-            return False
-        if self._last_frame is None:
+        frame = self._last_frame  # фиксируем фрейм, чтобы избежать гонки данных
+        if frame is None:
             self.get_logger().warn("No camera frame yet, skip snap")
             return False
         path = os.path.join(PHOTOS_DIR, f"{tag}.jpg")
         try:
-            cv2.imwrite(path, self._last_frame)
-            self.get_logger().info(f"📸 saved: {path}")
+            cv2.imwrite(path, frame)
+            self.get_logger().info(f"📸 Saved: {path}")
+            self.recognize(frame)
             return True
         except Exception as e:
             self.get_logger().warn(f"Failed to save photo: {e}")
             return False
+        
+    def save_detection(self, frame, label):
+        """Сохранение кадра с найденным объектом"""
+        os.makedirs("detections", exist_ok=True)
+        path = f"detections/{label}_{int(time.time())}.jpg"
+        cv2.imwrite(path, frame)
+        self.get_logger().info(f"Снимок сохранен: {path}")
 
     def move_body_and_wait(self, dx, dy, dz, name, speed=SPEED):
         """Команда в body + ожидание по времени (дистанция/скорость + запас)."""
@@ -157,13 +178,27 @@ class DroneController(Node):
         wait_s = max(3.0, dist / max(speed, 0.01) + 3.0)  # +3с запас
 
         self.get_logger().info(f"Move {name}: body dx={dx:.2f} dy={dy:.2f} dz={dz:.2f} | wait≈{wait_s:.1f}s")
-        ok = self.navigate(dx, dy, dz, yaw=0.0, speed=speed, auto_arm=False, frame_id=BODY_FRAME)
+        ok = self.navigate(dx, dy, dz, yaw=0.0, speed=speed, auto_arm=False, frame_id="body")
         if not ok:
             self.get_logger().warn(f"Move {name}: navigate failed")
             return False
 
         self.sleep_spin(wait_s)
         self.snap(name)
+        return True
+    
+    def move_aruco_and_wait(self, aruco_id):
+        wait_s = 5
+        marker_frame = f"aruco_{aruco_id}"
+
+        self.get_logger().info(f"Move to {marker_frame}")
+        ok = self.navigate(0, 0, 0, yaw=0.0, speed=SPEED, auto_arm=False, frame_id=marker_frame)
+        if not ok:
+            self.get_logger().warn(f"Move {marker_frame}: navigate failed")
+            return False
+
+        self.sleep_spin(wait_s)
+        self.snap(marker_frame)
         return True
 
 
@@ -191,18 +226,26 @@ def main():
 
         # Взлет (relative body)
         print(f">>> Takeoff to {TAKEOFF_Z}m (body)")
-        ok = drone.navigate(0.0, 0.0, TAKEOFF_Z, yaw=0.0, speed=0.5, auto_arm=True, frame_id=BODY_FRAME)
+        ok = drone.navigate(x=0.0, y=0.0, z=TAKEOFF_Z, yaw=0.0, speed=1.0, auto_arm=True, frame_id="body")
         if not ok:
             print("ERROR: Takeoff failed")
             return
 
         # Подождём подольше (взлет)
-        drone.sleep_spin(max(5.0, TAKEOFF_Z/0.5 + 3.0))
+        drone.sleep_spin(max(5.0, TAKEOFF_Z/1.0 + 3.0))
         drone.snap("00_TAKEOFF")
 
         # Полёт по змейке (relative body)
-        for i, (name, dx, dy, dz) in enumerate(BODY_MOVES, start=1):
-            drone.move_body_and_wait(dx, dy, dz, f"{i:02d}_{name}", speed=SPEED)
+        # for i, (name, dx, dy, dz) in enumerate(BODY_MOVES, start=1):
+        #     drone.move_body_and_wait(dx, dy, dz, f"{i:02d}_{name}", speed=SPEED)
+        
+        for aruco_id in ARUCO_TARGETS:
+            success = drone.move_aruco_and_wait(aruco_id)
+            
+            if success:
+                print(f"Достигнут маркер {aruco_id}.")
+            else:
+                print(f"Не удалось найти маркер {aruco_id}, пропускаю.")
 
         print(">>> Landing")
         drone.land()
