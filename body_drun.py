@@ -7,6 +7,7 @@ import sys
 
 import rclpy
 from rclpy.node import Node
+from recognize import RecognizeImage
 
 from offboard_interfaces.srv import Navigate, GetTelemetry
 from std_srvs.srv import Trigger
@@ -22,8 +23,9 @@ except Exception:
 
 # ===== конфиг =====
 CELL = 0.8
-TAKEOFF_Z = 0.8       # взлет на 0.8 (или сколько вам надо)
-SPEED = 0.6
+CELL_POGRESH = 0.15
+TAKEOFF_Z = 0.4
+SPEED = 0.5
 ANG_VEL = 1.0
 
 BODY_FRAME = "body"
@@ -31,15 +33,15 @@ BODY_FRAME = "body"
 PHOTOS_DIR = "photos"
 os.makedirs(PHOTOS_DIR, exist_ok=True)
 
-CAMERA_SENSOR = "0v5647"
-IMAGE_TOPIC = f"/{CAMERA_SENSOR}/image_raw"
+CAMERA_SENSOR = "main_camera"
+IMAGE_TOPIC = "/aruco_det/debug_image"
 
 # Маршрут “как ты описал”
 # 2 клетки вперёд, 1 влево, 2 назад, 1 влево, 2 вперёд
 BODY_MOVES = [
-    ("FWD_2",   +2*CELL, 0.0,     0.0),
+    ("FWD_2",   +2*(CELL-CELL_POGRESH-0.05), 0.0,     0.0),
     ("LEFT_1",  0.0,     +1*CELL, 0.0),
-    ("BACK_2",  -2*CELL, 0.0,     0.0),
+    ("BACK_2",  -2*(CELL-CELL_POGRESH), 0.0,     0.0),
     ("LEFT_1",  0.0,     +1*CELL, 0.0),
     ("FWD_2",   +2*CELL, 0.0,     0.0),
 ]
@@ -47,6 +49,7 @@ BODY_MOVES = [
 class DroneController(Node):
     def __init__(self):
         super().__init__("snake_body_mission")
+        self._shooting = False  # флаг для фотопотока
 
         self.navigate_client = self.create_client(Navigate, "/navigate")
         self.land_client = self.create_client(Trigger, "/land")
@@ -59,11 +62,8 @@ class DroneController(Node):
         self.bridge = CvBridge() if CAMERA_AVAILABLE else None
         self._last_frame = None
 
-        if CAMERA_AVAILABLE:
-            self.create_subscription(Image, IMAGE_TOPIC, self._image_cb, 10)
-            self.get_logger().info(f"Camera subscription ON: {IMAGE_TOPIC}")
-        else:
-            self.get_logger().warn("Camera disabled (no cv_bridge/sensor_msgs/cv2).")
+        self.create_subscription(Image, IMAGE_TOPIC, self._image_cb, 10)
+        self.get_logger().info(f"Camera subscription ON: {IMAGE_TOPIC}")
 
         self.get_logger().info("All services are ready")
 
@@ -135,35 +135,52 @@ class DroneController(Node):
         while time.time() - t0 < duration_s and rclpy.ok():
             rclpy.spin_once(self, timeout_sec=step)
 
-    def snap(self, tag: str):
-        if not CAMERA_AVAILABLE:
-            return False
+    def shot(self):
         if self._last_frame is None:
             self.get_logger().warn("No camera frame yet, skip snap")
             return False
-        path = os.path.join(PHOTOS_DIR, f"{tag}.jpg")
+        
+        timestamp = int(time.time())
+        path = os.path.join("photos", f"shot_{timestamp}.jpg")
         try:
             cv2.imwrite(path, self._last_frame)
-            self.get_logger().info(f"📸 saved: {path}")
+            self.get_logger().info(f"📸 Saved: {path}")
             return True
         except Exception as e:
             self.get_logger().warn(f"Failed to save photo: {e}")
             return False
 
-    def move_body_and_wait(self, dx, dy, dz, name, speed=SPEED):
+    def move_body_and_wait(self, dx, dy, dz, speed=SPEED):
         """Команда в body + ожидание по времени (дистанция/скорость + запас)."""
         dist = math.sqrt(dx*dx + dy*dy + dz*dz)
         wait_s = max(2.0, dist / max(speed, 0.01) + 2.0)  # +2с запас
 
-        self.get_logger().info(f"Move {name}: body dx={dx:.2f} dy={dy:.2f} dz={dz:.2f} | wait≈{wait_s:.1f}s")
+        self.get_logger().info(f"Move: body dx={dx:.2f} dy={dy:.2f} dz={dz:.2f} | wait≈{wait_s:.1f}s")
         ok = self.navigate(dx, dy, dz, yaw=0.0, speed=speed, auto_arm=False, frame_id=BODY_FRAME)
         if not ok:
-            self.get_logger().warn(f"Move {name}: navigate failed")
+            self.get_logger().warn("Move: navigate failed")
             return False
-
+       # self.shot()
         self.sleep_spin(wait_s)
-        self.snap(name)
+        #self.shot()
         return True
+    
+    def start_shooting(self, interval=1.0):
+        """Запускает фоновый поток, который фотографирует каждые interval секунд."""
+        self._shooting = True
+        def _loop():
+            while self._shooting and rclpy.ok():
+                self.shot()
+                time.sleep(interval)
+        self._shoot_thread = threading.Thread(target=_loop, daemon=True)
+        self._shoot_thread.start()
+        self.get_logger().info(f"📸 Auto-shooting started (every {interval}s)")
+
+    def stop_shooting(self):
+        """Останавливает фоновый поток фотографирования."""
+        self._shooting = False
+        self.get_logger().info("📸 Auto-shooting stopped")
+
 
 
 def telemetry_loop(node: DroneController):
@@ -195,17 +212,25 @@ def main():
             print("ERROR: Takeoff failed")
             return
 
+        drone.start_shooting(interval=1.0)
+
         # Подождём подольше (взлет)
         drone.sleep_spin(max(5.0, TAKEOFF_Z/1.0 + 3.0))
-        drone.snap("00_TAKEOFF")
 
         # Полёт по змейке (relative body)
         for i, (name, dx, dy, dz) in enumerate(BODY_MOVES, start=1):
-            drone.move_body_and_wait(dx, dy, dz, f"{i:02d}_{name}", speed=SPEED)
+            drone.move_body_and_wait(dx, dy, dz, speed=SPEED)
+            t = drone.get_telemetry()
+            if t.z > (TAKEOFF_Z+0.3): 
+                drone.move_body_and_wait(0, 0, -abs((TAKEOFF_Z+0.3)-t), speed=SPEED)
 
+        drone.stop_shooting()
+        
         print(">>> Landing")
         drone.land()
         time.sleep(4.0)
+        rec = RecognizeImage()
+        rec.start()
 
         print("\n=== DONE ===")
 
@@ -213,8 +238,21 @@ def main():
         print("\n>>> Interrupted, landing...")
         try:
             drone.land()
-            time.sleep(3.0)
+            time.sleep(4.0)
+            rec = RecognizeImage()
+            rec.start()
         except Exception:
+            drone.land()
+            time.sleep(4.0)
+            rec = RecognizeImage()
+            rec.start()
+            pass
+        
+    except Exception:
+            drone.land()
+            time.sleep(4.0)
+            rec = RecognizeImage()
+            rec.start()
             pass
 
     finally:

@@ -1,7 +1,15 @@
 from drone_controller import DroneController
 
-TAKEOFF_HEIGHT = 0.5
+TAKEOFF_HEIGHT = 0.8
 FLIGHT_SPEED = 0.5
+
+FRAMES = [
+    (1.6, 0.0, 0.5),
+    (1.6, 1.6, 0.5),
+    (0.8, 0.0, 0.5),
+    (0.0, 0.0, 0.5),
+    (0.0, 1.6, 0.5)
+]
 
 class ArucoFramesDroneController(DroneController):
     def __init__(self, markers):
@@ -23,18 +31,16 @@ class ArucoFramesDroneController(DroneController):
         self.sleep_spin(5)
 
         self.get_logger().info("Start flight by targets")
-        for aruco_id in self.markers:
-            marker_frame = f"aruco_{aruco_id}"
-            self.get_logger().info(f"Fly to {marker_frame}")
-            
-            success = self.navigate(x=0.0, y=0.0, z=0.5, speed=FLIGHT_SPEED, frame_id=marker_frame)
-            
+        for i, (dx, dy, dz) in enumerate(FRAMES, start=1):
+
+            success = self.navigate(x=dx, y=dy, z=0.5, speed=FLIGHT_SPEED, frame_id="aruco_map")
             if success:
-                self.get_logger().info(f"Success fly to {aruco_id}")
+                self.get_logger().info(f"Success fly to {i}")
                 self.shot()
                 self.sleep_spin(5)
-            else:
-                self.get_logger().error(f"NOT FOUND {aruco_id}, skipping.")
+            else: 
+                self.get_logger().error(f"NOT FOUND {i}, skipping.")
+
             
         # 3. Посадка
         self.get_logger().info("\n>>> Landing")

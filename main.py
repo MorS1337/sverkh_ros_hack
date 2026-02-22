@@ -6,7 +6,7 @@ import rclpy
 import threading
 import time
 
-ARUCO_MARKERS = [49, 81, 51, 50, 61, 50, 58, 62, 64]
+ARUCO_MARKERS = [49, 81, 51, 61, 50, 58, 62, 64]
 
 CELL = 0.8
 MOVES = [    

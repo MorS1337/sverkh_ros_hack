@@ -20,56 +20,8 @@ class PointsFlightDroneController(DroneController):
         super().__init__()
         self.points = points
 
-    def _detect_navigate_target_support(self) -> bool:
-        t = self.get_telemetry(frame_id="navigate_target")
-        ok = bool(t and finite(t.x) and finite(t.y) and finite(t.z))
-        self._navigate_target_supported = ok
-        self.get_logger().info(f"navigate_target support: {ok}")
-        return ok
-
-    def navigate_wait(self, x, y, z, frame_id, tolerance=TOLERANCE, timeout=WAIT_TIMEOUT, auto_arm=False):
-        """
-        Канон Clover:
-        1) отправили navigate
-        2) ждём, пока get_telemetry('navigate_target') станет < tolerance
-        Fallback: если navigate_target не поддержан — считаем расстояние в frame_id до (x,y,z).
-        """
-        if not self.navigate(x, y, z, frame_id=frame_id, auto_arm=auto_arm, speed=FLIGHT_SPEED, yaw=float("nan")):
-            return False
-
-        if self._navigate_target_supported is None:
-            self._detect_navigate_target_support()
-            print(f"self._navigate_target_supported: {self._navigate_target_supported}")
-
-        t0 = time.time()
-        while time.time() - t0 < timeout and rclpy.ok():
-
-            # ТОЛЬКО ЕСЛИ НАВИГЕЙТ ТАРГЕТ РАБОТАЕТ
-            if self._navigate_target_supported:
-                t = self.get_telemetry(frame_id="navigate_target")
-                if t and finite(t.x) and finite(t.y) and finite(t.z):
-                    dist = math.sqrt(t.x*t.x + t.y*t.y + t.z*t.z)
-                    if dist < tolerance:
-                        return True
-                self.sleep_spin(0.2)
-                continue
-            # ТОЛЬКО ЕСЛИ НАВИГЕЙТ ТАРГЕТ РАБОТАЕТ
-
-            t = self.get_telemetry(frame_id=frame_id)
-            if t and finite(t.x) and finite(t.y) and finite(t.z):
-
-                dist = get_distance(t.x, t.y, t.z, x, y, z)
-                if dist < tolerance:
-                    return True
-                
-            self.sleep_spin(0.2)
-
-        self.get_logger().warn(f"Timeout waiting target ({frame_id}) x={x:.2f} y={y:.2f} z={z:.2f}")
-        return False
-    
-
-    def own_navigate_wait(self, x, y, z):
-        ok = self.navigate(x, y, z, speed=FLIGHT_SPEED)
+    def navigate_wait(self, x, y, z):
+        ok = self.navigate(x, y, z, speed=FLIGHT_SPEED, frame_id="body")
         if not ok:
             return False
 
@@ -111,7 +63,7 @@ class PointsFlightDroneController(DroneController):
         self.get_logger().info("Start flight by points")
         for i, (dx, dy, dz) in enumerate(self.points, start=1):
             self.get_logger().info(f"Moving to {i}: ({dx}, {dy}, {dz})")
-            success = self.navigate_wait(dx, dy, dz, frame_id="body") # или поменять на own_navigate_wait
+            success = self.navigate_wait(dx, dy, dz) # или поменять на own_navigate_wait
 
             if success:
                 self.get_logger().info(f"Success fly to {i}: ({dx}, {dy}, {dz})")

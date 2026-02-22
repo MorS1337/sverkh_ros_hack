@@ -22,32 +22,28 @@ class RecognizeImage:
 
         print("YOLO loaded, starting predict...")
         for p in photos:
-            try:
-                results = model.predict(source=p, conf=0.5, verbose=False)
-            except Exception as e:
-                print(f"YOLO failed on {p}: {e}")
-                continue
+            # 2. Запускаем распознавание
+            results = model.predict(p, conf=0.1, verbose=False)
+            found_targets = []
 
-            found = set()
             for r in results:
-                for box in getattr(r, "boxes", []):
+                for box in r.boxes:
                     cls_id = int(box.cls[0])
-                    name = model.names.get(cls_id, str(cls_id))
-                    if name in TARGET_CLASSES:
-                        found.add(name)
+                    label = model.names[cls_id]
 
-            try:
-                annotated = results[0].plot() if results else None
-                if annotated is not None:
-                    out = os.path.join(RESULTS_DIR, "found_" + os.path.basename(p))
-                    cv2.imwrite(out, annotated)
-            except Exception:
-                pass
-
-            if found:
-                print(f"✅ {os.path.basename(p)} -> {sorted(found)}")
+                    if label in TARGET_CLASSES:
+                        found_targets.append(label)
+                        print(f"!!! ОБЪЕКТ ОБНАРУЖЕН: {label.upper()} !!!")
+            
+            # 3. Сохраняем результат с рамками (bounding boxes), если что-то нашли
+            if found_targets:
+                # .plot() автоматически рисует рамки вокруг найденных объектов
+                annotated_frame = results[0].plot() 
+                det_path = os.path.join(RESULTS_DIR, "found_" + os.path.basename(p))
+                cv2.imwrite(det_path, annotated_frame)
+                print(f"Снимок с рамками объектов сохранен: {det_path}")
             else:
-                print(f"— {os.path.basename(p)} -> empty")
+                print("Целевые объекты на кадре не найдены.")
 
         print("All images recognized.")
 
