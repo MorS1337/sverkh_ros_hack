@@ -7,3 +7,5 @@ __pycache__/
 test.py
 venv/
 .DS_Store
+body_drun.py
+регламент.txt

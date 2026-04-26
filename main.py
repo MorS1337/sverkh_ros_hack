@@ -48,10 +48,10 @@ def main():
     strategy = ArucoFramesDroneController(markers=ARUCO_MARKERS)
 
     # 2. Продвинутый полет по координатам
-    strategy = PointsFlightDroneController(points=POINTS)
+    # strategy = PointsFlightDroneController(points=POINTS)
 
     # 3. На удачу
-    strategy = LuckyFlightDroneController(moves=MOVES)
+    # strategy = LuckyFlightDroneController(moves=MOVES)
 
     # Запускаем поток телеметрии
     telemetry_thread = threading.Thread(target=lambda: telemetry_loop(strategy), daemon=True)

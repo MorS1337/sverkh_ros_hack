@@ -22,7 +22,7 @@ class RecognizeImage:
 
         print("YOLO loaded, starting predict...")
         for p in photos:
-            # 2. Запускаем распознавание
+            # Запускаем распознование 
             results = model.predict(p, conf=0.1, verbose=False)
             found_targets = []
 
@@ -35,7 +35,6 @@ class RecognizeImage:
                         found_targets.append(label)
                         print(f"!!! ОБЪЕКТ ОБНАРУЖЕН: {label.upper()} !!!")
             
-            # 3. Сохраняем результат с рамками (bounding boxes), если что-то нашли
             if found_targets:
                 # .plot() автоматически рисует рамки вокруг найденных объектов
                 annotated_frame = results[0].plot() 
