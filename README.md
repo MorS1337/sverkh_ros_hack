@@ -216,14 +216,14 @@ python -c "from recognize import RecognizeImage; RecognizeImage().start()"
 flowchart LR
     A[body_drun.py] --> B[Body Snake Mission]
     B --> C[DroneController ROS2 Node]
-    C --> D[/navigate auto_arm=true]
-    C --> E[/get_telemetry]
-    C --> F[/land]
-    C --> G[/aruco_det/debug_image]
-    G --> H[photos/shot_*.jpg]
+    C --> D["/navigate auto_arm=true"]
+    C --> E["/get_telemetry"]
+    C --> F["/land"]
+    C --> G["/aruco_det/debug_image"]
+    G --> H["photos/shot_*.jpg"]
     H --> I[recognize.py]
     I --> J[YOLOv8n NCNN]
-    J --> K[detections/found_*.jpg]
+    J --> K["detections/found_*.jpg"]
 ```
 
 ### 6.3. Структура проекта
